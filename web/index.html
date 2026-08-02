@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Choose Your Adventure</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600;7..72,700&family=DM+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="mist" aria-hidden="true"></div>
+    <div class="canopy" aria-hidden="true"></div>
+
+    <aside class="rail" aria-label="Adventures">
+      <p class="rail-label">Start</p>
+      <button type="button" id="btn-woods" class="rail-btn">
+        Lost in the Woods
+      </button>
+      <button type="button" id="btn-lobby" class="rail-btn ghost">
+        New adventure
+      </button>
+
+      <p class="rail-label rail-spacer">Your adventures</p>
+      <div id="adventure-list" class="adventure-list"></div>
+      <p id="adventure-empty" class="adventure-empty">No saved runs yet.</p>
+
+      <div id="rail-play-tools" class="rail-play-tools" hidden>
+        <button type="button" id="btn-save" class="rail-btn save">
+          Save progress
+        </button>
+        <p id="save-status" class="save-status" hidden></p>
+      </div>
+    </aside>
+
+    <main class="shell">
+      <section id="lobby" class="lobby">
+        <header class="brand">
+          <p class="brand-mark">Choose Your Adventure</p>
+          <p class="brand-sub">
+            Generate a fresh setting — or continue a run from the side panel.
+          </p>
+        </header>
+
+        <div class="lobby-actions">
+          <button type="button" id="btn-generate" class="cta">
+            Generate a new setting
+          </button>
+          <p id="generate-status" class="generate-status" hidden></p>
+        </div>
+
+        <article id="preview" class="preview" hidden>
+          <p class="preview-kicker" id="preview-source">Generated</p>
+          <h2 id="preview-title" class="preview-title"></h2>
+          <p id="preview-premise" class="preview-premise"></p>
+          <p class="preview-objective-label">Objective</p>
+          <p id="preview-objective" class="preview-objective"></p>
+          <div class="preview-actions">
+            <button type="button" id="btn-accept" class="cta">Play this</button>
+            <button type="button" id="btn-reroll" class="cta secondary">
+              Something else
+            </button>
+          </div>
+        </article>
+      </section>
+
+      <section id="play" class="play" hidden>
+        <header class="brand compact">
+          <p class="brand-mark" id="brand-title">Adventure</p>
+          <p class="brand-sub" id="premise"></p>
+          <p class="objective-line" id="objective-line" hidden></p>
+        </header>
+
+        <div class="stage" aria-live="polite">
+          <div class="meta">
+            <span id="time">t = 0</span>
+            <span id="status-pill" class="pill">exploring</span>
+          </div>
+
+          <h1 id="area-name" class="area-name">—</h1>
+          <p id="area-desc" class="area-desc"></p>
+          <p id="narrative" class="narrative"></p>
+
+          <div class="vitals" id="vitals">
+            <div class="vital">
+              <div class="vital-head">
+                <span>Health</span>
+                <span id="health-val">80</span>
+              </div>
+              <div class="track"><div id="health-bar" class="fill health"></div></div>
+            </div>
+            <div class="vital">
+              <div class="vital-head">
+                <span>Satiation</span>
+                <span id="satiation-val">65</span>
+              </div>
+              <div class="track">
+                <div id="satiation-bar" class="fill satiation"></div>
+              </div>
+              <span id="satiation-band" class="band"></span>
+            </div>
+            <div class="vital">
+              <div class="vital-head">
+                <span>Energy</span>
+                <span id="energy-val">70</span>
+              </div>
+              <div class="track"><div id="energy-bar" class="fill energy"></div></div>
+              <span id="energy-band" class="band"></span>
+            </div>
+          </div>
+
+          <div class="pack">
+            <span class="pack-label">Pack</span>
+            <div id="items" class="items">Empty</div>
+          </div>
+
+          <div class="actions-wrap">
+            <h2 class="actions-title">What do you do?</h2>
+            <div id="actions" class="actions"></div>
+          </div>
+
+          <button type="button" id="restart" class="restart">Back to lobby</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
