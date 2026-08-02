@@ -6,16 +6,14 @@ import json
 import os
 import random
 import re
-import ssl
-import urllib.error
-import urllib.request
+import sys
+from pathlib import Path
 from typing import Any
 
-import certifi
-
-
-def _ssl_context() -> ssl.SSLContext:
-    return ssl.create_default_context(cafile=certifi.where())
+# Generated BAML client lives at repo root (sibling of cyoa/).
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 
 def _id(rng: random.Random, *parts: str) -> str:
@@ -119,62 +117,6 @@ _BANNED_SUBSTR = _BANNED_TERMS
 
 _ALLOWED_ACTION_KINDS = frozenset({"universal", "energy", "tool", "transition", "chance"})
 _ALLOWED_ITEM_KINDS = frozenset({"tool", "weapon", "food", "drink", "key", "lore", "material"})
-
-_LLM_SYSTEM = (
-    "You create playable CYOA scenario JSON for a game engine. "
-    "Output ONE JSON object only. "
-    "Every generation must be structurally NEW: different map shape, win condition, and verbs. "
-    "Do NOT use these whole words/themes: troll, cottage, hatchet, axe, scroll, grindstone, "
-    "thicket, berry, snake, shed, woods, sharpen, weakness. No combat kind. "
-    "CRITICAL: every actions[] entry MUST be an object, never a bare string. "
-    "Required action fields: id (string), label (human-readable string), kind "
-    "(universal|energy|tool|transition|chance). "
-    "transition actions also need target_area_id. "
-    "chance actions need success_chance (0-1) and success/failure outcome objects. "
-    "items[].kind MUST be one of: tool|weapon|food|drink|key|lore|material. "
-    "ENGINE WIN RULES: entering any id in exit_area_ids wins immediately. "
-    "Therefore set exit_area_ids to [] and win ONLY via an action or outcome with "
-    '"win": true on a late/gated step (requires items, flags, or a closed gate). '
-    "If you invent an exit area, it must NOT be reachable by an ungated transition from start. "
-    "When an action finds/gives an item, set grant_item_id (or success.grant_item_id) "
-    "to a real items[].id — narrative alone does not grant. "
-    "All target_area_id / required_tool_id / gate requires_* must reference real ids. "
-    "Build a multi-step adventure: at least 3 areas, 6+ actions, and at least one "
-    "non-transition action. The player must not be able to win in one free move. "
-    "objective and labels must be plain English."
-)
-
-_LLM_USER = (
-    "Invent a COMPLETELY new playable adventure. "
-    "Vary topology (hub/chain/loop/phases/fork) and win rule "
-    "(assemble/sequence/trade/timing/choice). "
-    "Return JSON with: title, premise, objective, opening, win_message, lose_message, "
-    "start_area_id, exit_area_ids (MUST be [] unless a single gated end area), "
-    "character {health,satiation,energy}, "
-    "clock {satiation_loss_per_tick,energy_gain_per_tick,health_loss_per_tick}, "
-    "items (non-empty array of {id,name,kind,description}), "
-    "areas (non-empty array of {id,name,description,actions}). "
-    "Include at least one action/outcome with win:true that requires prior progress "
-    "(items granted via grant_item_id and/or flags/gates). "
-    "Example transition: "
-    '{"id":"go_dock","label":"Walk to the dock","kind":"transition",'
-    '"narrative":"Boards creak underfoot.","target_area_id":"dock"}. '
-    "Example win (gated): "
-    '{"id":"finish","label":"Assemble the device","kind":"universal",'
-    '"required_any_item_ids":["part_a","part_b"],'
-    '"narrative":"It locks into place.","win":true}. '
-    "Never put strings directly in actions[]."
-)
-
-_LLM_REPAIR_HINTS = (
-    "Return a FIXED complete scenario that satisfies engine playability. "
-    "Set exit_area_ids to []. Win only with win:true on a late/gated action. "
-    "Every actions[] entry MUST be an object with id, label, kind "
-    "(and target_area_id for transitions). "
-    "items[].kind must be tool|weapon|food|drink|key|lore|material. "
-    "Use grant_item_id when finding items. No bare strings in actions[]. "
-    "No instant win: start must not reach an exit or win:true action via ungated moves."
-)
 
 
 def _banned_hits(text: str) -> list[str]:
@@ -1824,14 +1766,6 @@ def procedural_scenario(rng: random.Random | None = None) -> dict[str, Any]:
     return spec
 
 
-def _extract_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    return json.loads(text)
-
-
 def load_dotenv(path: str | os.PathLike[str] | None = None) -> None:
     """Load KEY=VALUE pairs from .env into os.environ (does not override existing)."""
     env_path = path or os.path.join(os.path.dirname(__file__), "..", ".env")
@@ -1851,72 +1785,121 @@ def load_dotenv(path: str | os.PathLike[str] | None = None) -> None:
             os.environ[name] = value
 
 
-def _llm_openrouter(prompt: str, *, trace_id: str | None = None) -> dict[str, Any]:
-    from .observability import log_llm_attempt, new_trace_id
+def _lower_engine_enums(obj: Any) -> Any:
+    """Map BAML PascalCase enum strings to engine lowercase values."""
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for key, val in obj.items():
+            if key in ("kind", "status") and isinstance(val, str):
+                out[key] = val.lower()
+            else:
+                out[key] = _lower_engine_enums(val)
+        return out
+    if isinstance(obj, list):
+        return [_lower_engine_enums(v) for v in obj]
+    return obj
+
+
+def _scenario_to_spec(scenario: Any) -> dict[str, Any]:
+    data = scenario.model_dump(exclude_none=True)
+    return _lower_engine_enums(data)
+
+
+def _baml_options() -> dict[str, Any]:
+    """Build ClientRegistry so OPENROUTER_MODEL overrides the BAML default."""
+    from baml_py import ClientRegistry
 
     load_dotenv()
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError("no openrouter key")
     model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.6-terra")
-    system = _LLM_SYSTEM
-    tid = trace_id or new_trace_id()
-    body = json.dumps(
+    registry = ClientRegistry()
+    registry.add_llm_client(
+        "OpenRouterRuntime",
+        "openrouter",
         {
             "model": model,
+            "api_key": key,
             "temperature": 1.15,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/chat/completions",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}",
-            "HTTP-Referer": "http://127.0.0.1:8765",
-            "X-Title": "ai-cyoa",
+            "headers": {
+                "HTTP-Referer": "http://127.0.0.1:8765",
+                "X-Title": "ai-cyoa",
+            },
         },
-        method="POST",
     )
+    registry.set_primary("OpenRouterRuntime")
+    return {"client_registry": registry}
+
+
+def _llm_baml_generate(*, trace_id: str) -> dict[str, Any]:
+    from baml_client import b
+
+    from .observability import log_llm_attempt
+
+    load_dotenv()
+    model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.6-terra")
     try:
-        with urllib.request.urlopen(req, timeout=70, context=_ssl_context()) as resp:
-            http_status = getattr(resp, "status", 200)
-            payload = json.loads(resp.read().decode("utf-8"))
-        raw = payload["choices"][0]["message"]["content"]
-        parsed = _extract_json(raw)
+        scenario = b.GenerateScenario(baml_options=_baml_options())
+        spec = _scenario_to_spec(scenario)
         log_llm_attempt(
-            trace_id=tid,
+            trace_id=trace_id,
             model=model,
-            system=system,
-            user=prompt,
-            raw_content=raw,
-            parsed=parsed,
-            http_status=http_status,
-            openrouter_id=payload.get("id"),
+            system="baml:GenerateScenario",
+            user="GenerateScenario()",
+            raw_content=json.dumps(spec),
+            parsed=spec,
+            http_status=200,
         )
-        return parsed
+        return spec
     except Exception as exc:
-        raw = None
-        http_status = None
-        if isinstance(exc, urllib.error.HTTPError):
-            http_status = exc.code
-            try:
-                raw = exc.read().decode("utf-8", errors="replace")
-            except Exception:  # noqa: BLE001
-                raw = None
         log_llm_attempt(
-            trace_id=tid,
+            trace_id=trace_id,
             model=model,
-            system=system,
-            user=prompt,
-            raw_content=raw,
+            system="baml:GenerateScenario",
+            user="GenerateScenario()",
             error=f"{type(exc).__name__}: {exc}",
-            http_status=http_status,
+        )
+        raise
+
+
+def _llm_baml_repair(
+    *,
+    trace_id: str,
+    reject_reason: str,
+    broken: dict[str, Any],
+) -> dict[str, Any]:
+    from baml_client import b
+
+    from .observability import log_llm_attempt
+
+    load_dotenv()
+    model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.6-terra")
+    broken_json = json.dumps(broken)[:6000]
+    try:
+        scenario = b.RepairScenario(
+            reject_reason,
+            broken_json,
+            baml_options=_baml_options(),
+        )
+        spec = _scenario_to_spec(scenario)
+        log_llm_attempt(
+            trace_id=trace_id,
+            model=model,
+            system="baml:RepairScenario",
+            user=f"reject={reject_reason}\n{broken_json[:500]}",
+            raw_content=json.dumps(spec),
+            parsed=spec,
+            http_status=200,
+        )
+        return spec
+    except Exception as exc:
+        log_llm_attempt(
+            trace_id=trace_id,
+            model=model,
+            system="baml:RepairScenario",
+            user=f"reject={reject_reason}",
+            error=f"{type(exc).__name__}: {exc}",
         )
         raise
 
@@ -1931,21 +1914,16 @@ def generate_scenario(prefer_llm: bool = True) -> dict[str, Any]:
 
     if prefer_llm:
         for attempt in range(2):
-            if attempt == 0:
-                prompt = _LLM_USER
-            else:
-                prompt = (
-                    f"{_LLM_USER}\n\n"
-                    f"PREVIOUS JSON FAILED VALIDATION: {reject_reason}. "
-                    f"{_LLM_REPAIR_HINTS}"
-                )
-                if last_bad is not None:
-                    prompt += (
-                        "\nBroken JSON to repair (fix structure, keep the concept if possible):\n"
-                        + json.dumps(last_bad)[:6000]
-                    )
             try:
-                spec = _llm_openrouter(prompt, trace_id=trace_id)
+                if attempt == 0:
+                    spec = _llm_baml_generate(trace_id=trace_id)
+                else:
+                    assert reject_reason is not None and last_bad is not None
+                    spec = _llm_baml_repair(
+                        trace_id=trace_id,
+                        reject_reason=reject_reason,
+                        broken=last_bad,
+                    )
                 matches = sorted(LOG_DIR.glob(f"*_{trace_id}_request.json"))
                 llm_path = str(matches[-1]) if matches else None
 
@@ -1966,14 +1944,7 @@ def generate_scenario(prefer_llm: bool = True) -> dict[str, Any]:
                     llm_path=llm_path,
                 )
                 return spec
-            except (
-                RuntimeError,
-                urllib.error.URLError,
-                urllib.error.HTTPError,
-                KeyError,
-                json.JSONDecodeError,
-                TimeoutError,
-            ) as exc:
+            except Exception as exc:  # noqa: BLE001 — fall back to procedural
                 reject_reason = f"exception: {type(exc).__name__}: {exc}"
                 matches = sorted(LOG_DIR.glob(f"*_{trace_id}_request.json"))
                 llm_path = str(matches[-1]) if matches else llm_path
